@@ -22,7 +22,9 @@ fn main() -> Result<()> {
 }
 
 fn handle_connection(mut stream: std::net::TcpStream) -> Result<()> {
-    let _ = stream.write("HTTP/1.1 200 OK\r\n\r\n".as_bytes())?;
+    let response = "HTTP/1.1 200 OK\r\n\r\n";
+
+    stream.write_all(response.as_bytes())?;
 
     Ok(())
 }
