@@ -1,6 +1,5 @@
-use core::str::Lines;
-use std::io::Read;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
+use std::io::BufReader;
 use std::net::TcpStream;
 use std::{io::Write, net::TcpListener};
 
@@ -14,10 +13,12 @@ fn main() -> Result<()> {
         match stream {
             Ok(stream) => {
                 println!("accepted new connection");
-                handle_connection(stream)?;
+                handle_connection(stream).unwrap_or_else(|e| {
+                    eprintln!("error: {}", e);
+                });
             }
             Err(e) => {
-                println!("error: {}", e);
+                eprintln!("error: {}", e);
             }
         }
     }
@@ -50,19 +51,18 @@ impl Request {
 struct Headers(Vec<(String, String)>);
 
 impl Headers {
-    fn from(lines: &mut Lines) -> Result<Self> {
-        let mut headers = Vec::new();
-
-        for line in lines {
-            if line.is_empty() {
-                break;
-            }
-
-            let Some(parts) = line.split_once(':') else {
-                return Err(anyhow::anyhow!("invalid header line: {}", line))?;
-            };
-            headers.push((parts.0.to_string(), parts.1.to_string()));
-        }
+    fn from(lines: &mut [String]) -> Result<Self> {
+        let headers = lines
+            .iter()
+            .take_while(|line| !line.is_empty())
+            .filter_map(|line| {
+                let Some(parts) = line.split_once(": ") else {
+                    eprintln!("invalid header line: {}", line);
+                    return None;
+                };
+                Some((parts.0.to_string(), parts.1.to_string()))
+            })
+            .collect::<Vec<_>>();
 
         Ok(Self(headers))
     }
@@ -72,19 +72,22 @@ impl Headers {
 struct Body(Vec<String>);
 
 impl Body {
-    fn from(lines: &mut Lines) -> Result<Self> {
-        let body = lines.map(|line| line.to_string()).collect();
+    fn from(lines: &mut [String]) -> Result<Self> {
+        let body = lines.iter().map(|line| line.to_string()).collect();
 
         Ok(Self(body))
     }
 }
 
 fn handle_connection(mut stream: TcpStream) -> Result<()> {
-    let mut request_string = String::new();
-    stream.read_to_string(&mut request_string)?;
-    let mut lines = request_string.lines();
+    let buf_reader = BufReader::new(&mut stream);
+    let mut lines = buf_reader
+        .lines()
+        .map(|line| line.expect("error reading line"))
+        .take_while(|line| !line.is_empty())
+        .collect::<Vec<_>>();
 
-    let first_line = lines.next().unwrap();
+    let first_line = lines.remove(0);
     let parts = first_line.split_whitespace().collect::<Vec<&str>>();
     let method = parts[0].to_string();
     let path = parts[1].to_string();
@@ -105,8 +108,6 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
             response.push_str("404 Not Found\r\n\r\n");
         }
     }
-
-    dbg!(&response);
 
     stream.write_all(response.as_bytes())?;
 
