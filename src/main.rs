@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::fmt;
 use std::io::BufRead;
@@ -7,7 +9,8 @@ use std::{io::Write, net::TcpListener};
 
 use anyhow::Result;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:4221")?;
     println!("Server started on: 127.0.0.1:4221");
 
@@ -15,8 +18,10 @@ fn main() -> Result<()> {
         match stream {
             Ok(stream) => {
                 println!("accepted new connection");
-                handle_connection(stream).unwrap_or_else(|e| {
-                    eprintln!("error: {}", e);
+                tokio::spawn(async move {
+                    handle_connection(stream).await.unwrap_or_else(|e| {
+                        eprintln!("error: {}", e);
+                    });
                 });
             }
             Err(e) => {
@@ -152,7 +157,7 @@ impl fmt::Display for Response {
     }
 }
 
-fn handle_connection(mut stream: TcpStream) -> Result<()> {
+async fn handle_connection(mut stream: TcpStream) -> Result<()> {
     let buf_reader = BufReader::new(&mut stream);
     let mut lines = buf_reader
         .lines()
