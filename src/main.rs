@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -49,7 +50,7 @@ impl Request {
 }
 
 #[derive(Debug)]
-struct Headers(Vec<(String, String)>);
+struct Headers(HashMap<String, String>);
 
 impl Headers {
     fn from(lines: &mut [String]) -> Result<Self> {
@@ -63,14 +64,14 @@ impl Headers {
                 };
                 Some((parts.0.to_string(), parts.1.to_string()))
             })
-            .collect::<Vec<_>>();
+            .collect::<HashMap<_, _>>();
 
         Ok(Self(headers))
     }
 }
 
 #[derive(Debug)]
-struct Body(Vec<String>);
+struct Body(String);
 
 impl Body {
     fn from(lines: &mut [String]) -> Result<Self> {
@@ -99,8 +100,8 @@ impl Response {
         Self {
             version: "HTTP/1.1".to_string(),
             status: Status::Ok,
-            headers: Headers(vec![]),
-            body: Body(vec![]),
+            headers: Headers(HashMap::new()),
+            body: Body("".to_string()),
         }
     }
 
@@ -109,10 +110,16 @@ impl Response {
     }
 
     fn set_header(&mut self, key: String, value: String) {
-        self.headers.0.push((key, value));
+        self.headers.0.insert(key, value);
     }
 
-    fn set_body(&mut self, body: Body) {
+    fn set_plain_text_body(&mut self, body: Body) {
+        self.headers
+            .0
+            .insert("Content-Length".to_string(), body.0.len().to_string());
+        self.headers
+            .0
+            .insert("Content-Type".to_string(), "text/plain".to_string());
         self.body = body;
     }
 }
@@ -136,10 +143,10 @@ impl fmt::Display for Response {
         }
         response.push_str("\r\n");
 
-        for line in &self.body.0 {
+        self.body.0.lines().for_each(|line| {
             response.push_str(line);
             response.push_str("\r\n");
-        }
+        });
 
         write!(f, "{}", response)
     }
@@ -164,8 +171,6 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
 
     let request = Request::new(method, path, version, headers, body);
 
-    dbg!(&request);
-
     let mut response = Response::new();
 
     match request.path.as_str() {
@@ -174,9 +179,11 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
         }
         x if x.starts_with("/echo/") => {
             let text = request.path.split_at(6).1;
-            response.set_body(Body(vec![text.to_string()]));
-            response.set_header("Content-Type".to_string(), "text/plain".to_string());
-            response.set_header("Content-Length".to_string(), text.len().to_string());
+            response.set_plain_text_body(Body(text.to_string()));
+        }
+        "/user-agent" => {
+            let user_agent = request.headers.0.get("User-Agent").unwrap();
+            response.set_plain_text_body(Body(user_agent.to_string()));
         }
         _ => {
             response.set_status(Status::NotFound);
