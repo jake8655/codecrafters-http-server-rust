@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::net::TcpStream;
@@ -79,6 +80,71 @@ impl Body {
     }
 }
 
+#[derive(Debug)]
+struct Response {
+    version: String,
+    status: Status,
+    headers: Headers,
+    body: Body,
+}
+
+#[derive(Debug)]
+enum Status {
+    Ok,
+    NotFound,
+}
+
+impl Response {
+    fn new() -> Self {
+        Self {
+            version: "HTTP/1.1".to_string(),
+            status: Status::Ok,
+            headers: Headers(vec![]),
+            body: Body(vec![]),
+        }
+    }
+
+    fn set_status(&mut self, status: Status) {
+        self.status = status;
+    }
+
+    fn set_header(&mut self, key: String, value: String) {
+        self.headers.0.push((key, value));
+    }
+
+    fn set_body(&mut self, body: Body) {
+        self.body = body;
+    }
+}
+
+impl fmt::Display for Response {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut response = format!("{} ", self.version);
+
+        match self.status {
+            Status::Ok => {
+                response.push_str("200 OK");
+            }
+            Status::NotFound => {
+                response.push_str("404 Not Found");
+            }
+        }
+        response.push_str("\r\n");
+
+        for (key, value) in &self.headers.0 {
+            response.push_str(&format!("{}: {}\r\n", key, value));
+        }
+        response.push_str("\r\n");
+
+        for line in &self.body.0 {
+            response.push_str(line);
+            response.push_str("\r\n");
+        }
+
+        write!(f, "{}", response)
+    }
+}
+
 fn handle_connection(mut stream: TcpStream) -> Result<()> {
     let buf_reader = BufReader::new(&mut stream);
     let mut lines = buf_reader
@@ -98,18 +164,26 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
 
     let request = Request::new(method, path, version, headers, body);
 
-    let mut response = format!("{} ", request.version);
+    dbg!(&request);
+
+    let mut response = Response::new();
 
     match request.path.as_str() {
         "/" => {
-            response.push_str("200 OK\r\n\r\n");
+            response.set_status(Status::Ok);
+        }
+        x if x.starts_with("/echo/") => {
+            let text = request.path.split_at(6).1;
+            response.set_body(Body(vec![text.to_string()]));
+            response.set_header("Content-Type".to_string(), "text/plain".to_string());
+            response.set_header("Content-Length".to_string(), text.len().to_string());
         }
         _ => {
-            response.push_str("404 Not Found\r\n\r\n");
+            response.set_status(Status::NotFound);
         }
     }
 
-    stream.write_all(response.as_bytes())?;
+    stream.write_all(response.to_string().as_bytes())?;
 
     Ok(())
 }
