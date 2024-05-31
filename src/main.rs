@@ -1,25 +1,55 @@
 #![allow(dead_code)]
 
+use anyhow::Result;
 use std::collections::HashMap;
+use std::env;
 use std::fmt;
+use std::fs;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::net::TcpStream;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::{io::Write, net::TcpListener};
 
-use anyhow::Result;
+struct Config {
+    directory: Box<PathBuf>,
+}
+
+impl Config {
+    fn new(mut args: impl Iterator<Item = String>) -> Self {
+        let mut directory = PathBuf::from(format!(
+            "{}/public",
+            env::current_dir().unwrap().to_str().unwrap()
+        ));
+
+        while let Some(arg) = args.next() {
+            if arg.as_str() == "--directory" {
+                directory = PathBuf::from(args.next().expect("invalid args"));
+            }
+        }
+
+        Self {
+            directory: Box::new(directory),
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:4221")?;
     println!("Server started on: 127.0.0.1:4221");
 
+    let config = Arc::new(Config::new(env::args()));
+
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 println!("accepted new connection");
+
+                let config = Arc::clone(&config);
                 tokio::spawn(async move {
-                    handle_connection(stream).await.unwrap_or_else(|e| {
+                    handle_connection(stream, config).await.unwrap_or_else(|e| {
                         eprintln!("error: {}", e);
                     });
                 });
@@ -127,6 +157,17 @@ impl Response {
             .insert("Content-Type".to_string(), "text/plain".to_string());
         self.body = body;
     }
+
+    fn set_file_body(&mut self, body: Body) {
+        self.headers.0.insert(
+            "Content-Type".to_string(),
+            "application/octet-stream".to_string(),
+        );
+        self.headers
+            .0
+            .insert("Content-Length".to_string(), body.0.len().to_string());
+        self.body = body;
+    }
 }
 
 impl fmt::Display for Response {
@@ -157,7 +198,7 @@ impl fmt::Display for Response {
     }
 }
 
-async fn handle_connection(mut stream: TcpStream) -> Result<()> {
+async fn handle_connection(mut stream: TcpStream, config: Arc<Config>) -> Result<()> {
     let buf_reader = BufReader::new(&mut stream);
     let mut lines = buf_reader
         .lines()
@@ -187,8 +228,27 @@ async fn handle_connection(mut stream: TcpStream) -> Result<()> {
             response.set_plain_text_body(Body(text.to_string()));
         }
         "/user-agent" => {
-            let user_agent = request.headers.0.get("User-Agent").unwrap();
+            let default_user_agent = String::from("None");
+            let user_agent = request
+                .headers
+                .0
+                .get("User-Agent")
+                .unwrap_or(&default_user_agent);
             response.set_plain_text_body(Body(user_agent.to_string()));
+        }
+        x if x.starts_with("/files/") => {
+            let path = config.directory.join(request.path.split_at(7).1);
+            let readable = fs::read_to_string(path);
+
+            match readable {
+                Ok(contents) => {
+                    response.set_file_body(Body(contents));
+                }
+                Err(e) => {
+                    eprintln!("error opening file: {}", e);
+                    response.set_status(Status::NotFound);
+                }
+            }
         }
         _ => {
             response.set_status(Status::NotFound);
