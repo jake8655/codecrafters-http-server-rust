@@ -38,9 +38,7 @@ pub async fn handle_connection(mut stream: TcpStream, config: Arc<Config>) -> Re
     let headers = Headers::from(header_lines)?;
 
     let mut body_lines = Vec::new();
-    if let Some(length) = headers.0.get("Content-Length") {
-        let length = length.parse::<usize>()?;
-
+    if let Some(length) = headers.get_content_length() {
         if length != 0 {
             let mut lines = vec![0; length];
             reader.read_exact(&mut lines)?;
@@ -64,13 +62,14 @@ pub async fn handle_connection(mut stream: TcpStream, config: Arc<Config>) -> Re
         x if x.starts_with("/echo/") => {
             let text = request.path.split_at(6).1;
             response.set_plain_text_body(Body(text.to_string()));
+
+            response.apply_compression(request.headers.get_accept_encoding());
         }
         "/user-agent" => {
             let default_user_agent = String::from("None");
             let user_agent = request
                 .headers
-                .0
-                .get("User-Agent")
+                .get_user_agent()
                 .unwrap_or(&default_user_agent);
             response.set_plain_text_body(Body(user_agent.to_string()));
         }

@@ -67,10 +67,71 @@ impl Headers {
                 return Err(anyhow::anyhow!("invalid header line: {}", line));
             };
 
-            headers.insert(parts.0.to_string(), parts.1.to_string());
+            let lowercase_key = parts.0.to_lowercase();
+
+            headers.insert(lowercase_key, parts.1.to_string());
         }
 
         Ok(Self(headers))
+    }
+
+    pub fn set(&mut self, key: String, value: String) {
+        self.0.insert(key, value);
+    }
+
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.0.get(key)
+    }
+
+    pub fn set_content_type(&mut self, content_type: ContentType) {
+        self.set("content-type".to_string(), content_type.to_string());
+    }
+
+    pub fn set_content_length(&mut self, length: usize) {
+        self.set("content-length".to_string(), length.to_string());
+    }
+
+    pub fn get_content_length(&self) -> Option<usize> {
+        self.get("content-length")
+            .and_then(|length| length.parse::<usize>().ok())
+    }
+
+    pub fn set_content_encoding(&mut self, encoding: ContentEncoding) {
+        self.set("content-encoding".to_string(), encoding.to_string());
+    }
+
+    pub fn get_accept_encoding(&self) -> Option<&String> {
+        self.get("accept-encoding")
+    }
+
+    pub fn get_user_agent(&self) -> Option<&String> {
+        self.get("user-agent")
+    }
+}
+
+pub enum ContentType {
+    PlainText,
+    OctetStream,
+}
+
+impl fmt::Display for ContentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ContentType::PlainText => write!(f, "text/plain"),
+            ContentType::OctetStream => write!(f, "application/octet-stream"),
+        }
+    }
+}
+
+pub enum ContentEncoding {
+    Gzip,
+}
+
+impl fmt::Display for ContentEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ContentEncoding::Gzip => write!(f, "gzip"),
+        }
     }
 }
 
@@ -133,24 +194,27 @@ impl Response {
     }
 
     pub fn set_plain_text_body(&mut self, body: Body) {
-        self.headers
-            .0
-            .insert("Content-Length".to_string(), body.0.len().to_string());
-        self.headers
-            .0
-            .insert("Content-Type".to_string(), "text/plain".to_string());
+        self.headers.set_content_type(ContentType::PlainText);
+        self.headers.set_content_length(body.0.len());
         self.body = body;
     }
 
     pub fn set_file_body(&mut self, body: Body) {
-        self.headers.0.insert(
-            "Content-Type".to_string(),
-            "application/octet-stream".to_string(),
-        );
-        self.headers
-            .0
-            .insert("Content-Length".to_string(), body.0.len().to_string());
+        self.headers.set_content_type(ContentType::OctetStream);
+        self.headers.set_content_length(body.0.len());
         self.body = body;
+    }
+
+    pub fn apply_compression(&mut self, accept_encoding: Option<&String>) {
+        if accept_encoding.is_none() {
+            return;
+        }
+
+        let accept_encoding = accept_encoding.unwrap();
+
+        if accept_encoding.contains("gzip") {
+            self.headers.set_content_encoding(ContentEncoding::Gzip);
+        }
     }
 }
 
