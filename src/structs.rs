@@ -1,8 +1,11 @@
 #![allow(dead_code)]
 
 use anyhow::Result;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Write;
 use std::str::FromStr;
 
 #[derive(Debug)]
@@ -47,6 +50,13 @@ impl Request {
             headers,
             body,
         }
+    }
+
+    pub fn is_gzip_encoding(&self) -> bool {
+        self.headers
+            .get_accept_encoding()
+            .map(|encoding| encoding.contains("gzip"))
+            .unwrap_or(false)
     }
 }
 
@@ -136,13 +146,35 @@ impl fmt::Display for ContentEncoding {
 }
 
 #[derive(Debug)]
-pub struct Body(pub String);
+pub struct Body(pub Vec<u8>);
 
 impl Body {
-    pub fn from(lines: Vec<String>) -> Result<Self> {
-        let body = lines.iter().map(|line| line.to_string()).collect();
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
 
-        Ok(Self(body))
+    pub fn from_str(s: &str) -> Self {
+        let mut body = Self::new();
+        body.push_str(s);
+
+        body
+    }
+
+    pub fn from_lines(lines: Vec<String>) -> Self {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(lines.join("\r\n").as_bytes());
+
+        Self(buffer)
+    }
+
+    pub fn push_str(&mut self, s: &str) {
+        self.0.extend_from_slice(s.as_bytes());
+    }
+}
+
+impl fmt::Display for Body {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", String::from_utf8_lossy(&self.0))
     }
 }
 
@@ -181,7 +213,7 @@ impl Response {
             version: "HTTP/1.1".to_string(),
             status: Status::Ok,
             headers: Headers(HashMap::new()),
-            body: Body("".to_string()),
+            body: Body(Vec::new()),
         }
     }
 
@@ -205,36 +237,34 @@ impl Response {
         self.body = body;
     }
 
-    pub fn apply_compression(&mut self, accept_encoding: Option<&String>) {
-        if accept_encoding.is_none() {
+    pub fn apply_compression(&mut self, request: &Request) {
+        if !request.is_gzip_encoding() {
             return;
         }
 
-        let accept_encoding = accept_encoding.unwrap();
+        self.headers.set_content_encoding(ContentEncoding::Gzip);
 
-        if accept_encoding.contains("gzip") {
-            self.headers.set_content_encoding(ContentEncoding::Gzip);
-        }
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&self.body.0).unwrap();
+        let compressed_body = encoder.finish().unwrap();
+
+        self.body = Body(compressed_body);
+        self.headers.set_content_length(self.body.0.len());
     }
-}
 
-impl fmt::Display for Response {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut response = format!("{} ", self.version);
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
 
-        response.push_str(&self.status.to_string());
-        response.push_str("\r\n");
+        buffer.extend_from_slice(format!("{} ", self.version).as_bytes());
+        buffer.extend_from_slice(format!("{}\r\n", self.status).as_bytes());
 
         for (key, value) in &self.headers.0 {
-            response.push_str(&format!("{}: {}\r\n", key, value));
+            buffer.extend_from_slice(format!("{}: {}\r\n", key, value).as_bytes());
         }
-        response.push_str("\r\n");
+        buffer.extend_from_slice(b"\r\n");
 
-        self.body.0.lines().for_each(|line| {
-            response.push_str(line);
-            response.push_str("\r\n");
-        });
+        buffer.extend_from_slice(&self.body.0);
 
-        write!(f, "{}", response)
+        buffer
     }
 }

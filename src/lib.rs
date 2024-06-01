@@ -49,7 +49,7 @@ pub async fn handle_connection(mut stream: TcpStream, config: Arc<Config>) -> Re
         }
     }
 
-    let body = Body::from(body_lines)?;
+    let body = Body::from_lines(body_lines);
 
     let request = Request::new(method, path, version, headers, body);
 
@@ -61,9 +61,9 @@ pub async fn handle_connection(mut stream: TcpStream, config: Arc<Config>) -> Re
         }
         x if x.starts_with("/echo/") => {
             let text = request.path.split_at(6).1;
-            response.set_plain_text_body(Body(text.to_string()));
+            response.set_plain_text_body(Body::from_str(text));
 
-            response.apply_compression(request.headers.get_accept_encoding());
+            response.apply_compression(&request);
         }
         "/user-agent" => {
             let default_user_agent = String::from("None");
@@ -71,7 +71,8 @@ pub async fn handle_connection(mut stream: TcpStream, config: Arc<Config>) -> Re
                 .headers
                 .get_user_agent()
                 .unwrap_or(&default_user_agent);
-            response.set_plain_text_body(Body(user_agent.to_string()));
+
+            response.set_plain_text_body(Body::from_str(user_agent));
         }
         x if x.starts_with("/files/") => {
             handle_files(&request, &mut response, &config);
@@ -81,7 +82,7 @@ pub async fn handle_connection(mut stream: TcpStream, config: Arc<Config>) -> Re
         }
     }
 
-    stream.write_all(response.to_string().as_bytes())?;
+    stream.write_all(&response.to_bytes())?;
 
     Ok(())
 }
@@ -95,7 +96,7 @@ fn handle_files(request: &Request, response: &mut Response, config: &Config) {
 
             match readable {
                 Ok(contents) => {
-                    response.set_file_body(Body(contents));
+                    response.set_file_body(Body::from_str(&contents));
                 }
                 Err(e) => {
                     eprintln!("error opening file: {}", e);
@@ -105,7 +106,8 @@ fn handle_files(request: &Request, response: &mut Response, config: &Config) {
         }
 
         Method::Post => {
-            let result = fs::write(path, request.body.0.as_str());
+            let contents = request.body.to_string();
+            let result = fs::write(path, contents);
 
             match result {
                 Ok(_) => {
